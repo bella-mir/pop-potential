@@ -1,0 +1,172 @@
+---
+title: "Картографирование потенциала поля расселения"
+author: "Bella Mironova"
+date: "2024-12-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r libraries, include=FALSE}
+library(dplyr)
+library(sf)
+library(mapview)
+library(readr)
+
+```
+
+### 1.Прочитаем данные о городах
+
+```{r }
+# Чтение CSV файла
+data <- read.table("cities.csv", sep=';', header = TRUE)
+
+# Проверка структуры данных
+str(data)
+
+```
+
+### 2.Создадим sf-объект
+
+```{r creating sf-file}
+# Убедитесь, что в CSV есть столбцы с координатами
+sf_cities <- st_as_sf(data, coords = c("longitude_dd", "latitude_dd"), crs = 4326)
+
+head(sf_cities)
+
+```
+
+### 3. Отфильтруем данные для рассматриваемого региона и по численности населения
+
+```{r filtering data by region}
+
+region_cities <- sf_cities %>% filter(region == "Краснодарский край" & population > 5000)
+
+```
+
+### 4. Посмотрим на результат на карте
+
+```{r exploring the data}
+
+mapview(region_cities)
+
+```
+
+### 5. Перепроецируем данные для матрицы расстояний
+
+```{r reprojecting}
+
+# Определение центральной долготы объекта
+bbox <- st_bbox(region_cities)
+longitude_center <- (bbox["xmin"] + bbox["xmax"]) / 2
+
+
+# Определение UTM зоны на основе долготы
+utm_zone <- floor((longitude_center + 180) / 6) + 1
+epsg_code <- 32600 + utm_zone  # EPSG для северного полушария
+
+# Перепроецирование в UTM
+region_cities_utm <- st_transform(region_cities, crs = epsg_code)
+
+# Проверка CRS результата
+print(st_crs(region_cities_utm))
+
+```
+
+
+### 7. Создадим матрицу расстояний
+
+```{r distance matrix}
+
+# Расчитаем расстояния между точками сетки и городами
+distances <- st_distance(region_cities_utm)
+
+head(distances)
+
+```
+
+### 8. Присоедним население к матрице расстояний
+```{r pop to dm}
+merged <- cbind(distances, population = region_cities_utm$population)
+head(merged)
+
+```
+
+### 9.1 Считаем потенциал для одного из городов
+
+```{r potential-one to dm}
+
+  row = merged[1,]
+
+  # Вычисляем расстояния и население
+  distances <- as.numeric(row[1:(ncol(merged) - 1)])
+  population <- merged[1:(ncol(merged) - 1), "population"]
+  
+  # Исключаем нулевые расстояния
+  valid <- distances != 0
+  
+  
+  # Рассчитываем потенциал
+  potential <- sum(population[valid] / distances[valid])
+  
+  # Рассчитываем логарифм
+  log2(potential * row["population"])
+
+
+```
+
+### 9.1 Функция для расчета потенциала плотности населения
+```{r pop to dm}
+
+calculate_potential <- function(row, data) {
+  # Вычисляем расстояния и население
+  distances <- as.numeric(row[1:(ncol(data) - 1)])  # Расстояния из строки
+  population <- data[1:(ncol(data) - 1), "population"]  # Население из всех строк
+  
+  # Исключаем нулевые расстояния
+  valid <- distances != 0
+  
+  # Рассчитываем потенциал
+  potential <- sum(population[valid] / distances[valid])
+  
+  # Возвращаем логарифм
+  log2(potential * as.numeric(row["population"]))
+}
+
+
+```
+
+### 10. Применение алгоритма к основному набору данных
+
+```{r subset}
+
+results <- apply(merged, 1, calculate_potential, data = merged)
+
+results
+
+```
+
+### 11.Записываем значения в набор данных с городами
+```{r test}
+
+region_cities_utm$potential <- results
+
+```
+
+### 12.Смотрим на результат
+```{r subset}
+
+region_cities_utm %>% mapview(zcol = "potential")
+
+```
+
+### 15.Сохраняем 
+
+```{r subset}
+
+st_write(region_cities_utm, "region_cities_potential.gpkg")
+
+```
